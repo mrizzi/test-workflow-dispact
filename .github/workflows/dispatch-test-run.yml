@@ -9,6 +9,7 @@ permissions:
   contents: read
   pull-requests: write
   actions: read
+  statuses: write
 
 jobs:
   discover:
@@ -20,6 +21,20 @@ jobs:
       author: ${{ steps.metadata.outputs.author }}
       trusted: ${{ steps.metadata.outputs.trusted }}
     steps:
+      - name: Set pending commit status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.workflow_run.head_sha,
+              state: 'pending',
+              description: 'Dispatch test in progress...',
+              context: 'Dispatch Test Run',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
+
       - name: Download metadata artifact
         uses: actions/download-artifact@v4
         with:
@@ -79,6 +94,21 @@ jobs:
             }
 
             core.setOutput('trusted', trusted.toString());
+
+      - name: Update status for approval gate
+        if: steps.metadata.outputs.trusted != 'true' && steps.metadata.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.workflow_run.head_sha,
+              state: 'pending',
+              description: 'Waiting for approval in eval-protected environment',
+              context: 'Dispatch Test Run',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
 
   gate:
     name: Approval Gate
@@ -143,4 +173,44 @@ jobs:
                 `| SHA | \`${headSha.substring(0, 7)}\` |`,
                 `| Workflow run | [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) |`,
               ].join('\n')
+            });
+
+  report-status:
+    name: Report Status
+    needs: [discover, gate, prove-secrets]
+    if: >-
+      always() &&
+      needs.discover.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set final commit status
+        env:
+          PROVE_RESULT: ${{ needs.prove-secrets.result }}
+          GATE_RESULT: ${{ needs.gate.result }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const proveResult = process.env.PROVE_RESULT;
+            const gateResult = process.env.GATE_RESULT;
+
+            let state, description;
+            if (proveResult === 'success') {
+              state = 'success';
+              description = 'Dispatch test passed — secret access confirmed';
+            } else if (gateResult === 'failure') {
+              state = 'failure';
+              description = 'Approval was rejected in eval-protected environment';
+            } else {
+              state = 'failure';
+              description = 'Dispatch test failed';
+            }
+
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.workflow_run.head_sha,
+              state,
+              description,
+              context: 'Dispatch Test Run',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });

@@ -40,22 +40,24 @@ jobs:
             const headSha = context.payload.workflow_run.head_sha;
             console.log(`Resolving PR for commit ${headSha}`);
 
-            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+            // listPullRequestsAssociatedWithCommit does not work for fork PRs —
+            // the commit lives in the fork, not the base repo's commit graph.
+            // Use pulls.list and match by head SHA instead.
+            const { data: prs } = await github.rest.pulls.list({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              commit_sha: headSha
+              state: 'open',
+              base: 'main'
             });
 
-            const openToMain = prs.filter(p => p.state === 'open' && p.base.ref === 'main');
-            if (openToMain.length === 0) {
+            const pr = prs.find(p => p.head.sha === headSha);
+            if (!pr) {
               core.warning(`No open PR targeting main found for commit ${headSha}`);
               core.setOutput('pr_number', '');
               core.setOutput('author', '');
               core.setOutput('trusted', 'false');
               return;
             }
-
-            const pr = openToMain[0];
             const prNumber = pr.number;
             const author = pr.user.login;
             console.log(`Found PR #${prNumber} by ${author}`);

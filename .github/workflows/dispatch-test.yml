@@ -1,0 +1,24 @@
+name: Dispatch Test
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  upload-metadata:
+    name: Upload Metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Write marker file
+        run: echo "triggered" > marker.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dispatch-metadata
+          path: marker.txt
